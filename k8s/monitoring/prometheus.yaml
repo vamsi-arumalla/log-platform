@@ -1,0 +1,129 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: log-platform
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    rule_files:
+      - /etc/prometheus/rules.yml
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [log-platform]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port, __address__]
+            action: replace
+            regex: (\d+);([^:]+)(?::\d+)?
+            replacement: $2:$1
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: app
+  rules.yml: |
+    groups:
+      - name: log-platform-slo
+        rules:
+          - record: job:log_query_p95_seconds
+            expr: histogram_quantile(0.95, sum(rate(log_query_duration_seconds_bucket[5m])) by (le, tier))
+          - record: kafka_consumer_lag_sum
+            expr: sum(kafka_consumer_lag) by (consumer_group)
+          - alert: HighQueryLatency
+            expr: histogram_quantile(0.95, sum(rate(log_query_duration_seconds_bucket[5m])) by (le)) > 0.5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: p95 query latency above 500ms for 5m
+          - alert: ConsumerLagGrowing
+            expr: sum(kafka_consumer_lag) by (consumer_group) > 100000
+            for: 3m
+            labels:
+              severity: critical
+            annotations:
+              summary: Consumer lag exceeds 100k messages
+          - alert: BackpressureEngaged
+            expr: log_backpressure_active == 1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: Ingestion backpressure active for 2m
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: log-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:latest
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=7d
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: log-platform
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: log-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-log-platform
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, endpoints]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-log-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-log-platform
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: log-platform
