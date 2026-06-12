@@ -32,7 +32,17 @@ func main() {
 		logger.Fatal("failed to create cold store", zap.Error(err))
 	}
 
-	engine := query.NewEngine(hotStore, coldStore, logger)
+	engine := query.NewEngine(hotStore, coldStore, cfg.Storage.ColdThreshold, logger)
+
+	// Compaction must run in-process: it drains this instance's hot store
+	// into S3, so a separate compactor binary would only ever see an empty store.
+	compactor := storage.NewCompactor(
+		hotStore,
+		coldStore,
+		cfg.Storage.CompactInterval,
+		cfg.Storage.ColdThreshold,
+		logger,
+	)
 
 	handler := func(ctx context.Context, batch model.LogBatch) error {
 		return hotStore.Store(ctx, batch)
@@ -51,6 +61,8 @@ func main() {
 			logger.Error("consumer error", zap.Error(err))
 		}
 	}()
+
+	go compactor.Start(ctx)
 
 	r := mux.NewRouter()
 	r.HandleFunc("/query", handleQuery(engine, logger)).Methods("POST")

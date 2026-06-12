@@ -8,7 +8,9 @@ QUERY_URL="${QUERY_URL:-http://localhost:8081}"
 INGEST_URL="${INGEST_URL:-http://localhost:8080}"
 
 check_health() {
-  curl -s -o /dev/null -w '%{http_code}' "$1/health" 2>/dev/null || echo "000"
+  # -m bounds the probe: a wedged (accepting but unresponsive) service must
+  # count as down, not hang the recovery loop past its 120s bail-out.
+  curl -s -m 5 -o /dev/null -w '%{http_code}' "$1/health" 2>/dev/null || echo "000"
 }
 
 wait_for_recovery() {

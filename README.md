@@ -37,11 +37,17 @@ A fault-tolerant log ingestion and query platform built on **Kafka**, **Kubernet
 | Component | Path | Role |
 |-----------|------|------|
 | Ingestor | `cmd/ingestor` | HTTP → Kafka producer with backpressure shedding |
-| Query | `cmd/query` | Kafka consumer + tiered query engine (hot/cold) |
-| Compactor | `cmd/compactor` | Hot→cold migration on an interval |
+| Query | `cmd/query` | Kafka consumer + tiered query engine + in-process compactor |
+| Compactor | `internal/storage/compactor.go` | Hot→cold migration; runs inside the query service so it drains the live hot store |
 | Backpressure | `internal/backpressure` | Queue-depth admission control |
 | Hot store | `internal/storage/hot.go` | In-memory indexed store with TTL eviction |
 | Cold store | `internal/storage/cold.go` | S3 gzip archives, date-partitioned keys |
+
+## Measured results (local single-broker stack, M-series MacBook)
+
+- **Burst tolerance**: p95 query latency held at **1ms** across baseline (100 logs/s), **10x burst (1,000 logs/s)**, and recovery phases (`scripts/loadtest.sh`).
+- **Failover**: restarting the Kafka broker under sustained write load caused **zero health-check downtime** for ingestor and query services (well under the 60s target). 246/300 durability probes were accepted and recovered; the remaining 54 were **rejected synchronously with errors** during the broker outage window (`acks=all` + bounded retries) — no acknowledged write was lost.
+- **Tiering**: entries compacted from the hot store into gzip S3 objects and were retrieved through the same query API (`tier: "tiered"`, 3ms).
 
 ## Observability
 

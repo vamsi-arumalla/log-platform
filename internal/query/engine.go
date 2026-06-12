@@ -11,23 +11,27 @@ import (
 )
 
 type Engine struct {
-	hot    *storage.HotStore
-	cold   *storage.ColdStore
-	logger *zap.Logger
+	hot           *storage.HotStore
+	cold          *storage.ColdStore
+	coldThreshold time.Duration
+	logger        *zap.Logger
 }
 
-func NewEngine(hot *storage.HotStore, cold *storage.ColdStore, logger *zap.Logger) *Engine {
+// coldThreshold must match the compactor's cold-age setting so the tier
+// boundary the engine assumes is the same one the compactor enforces.
+func NewEngine(hot *storage.HotStore, cold *storage.ColdStore, coldThreshold time.Duration, logger *zap.Logger) *Engine {
 	return &Engine{
-		hot:    hot,
-		cold:   cold,
-		logger: logger,
+		hot:           hot,
+		cold:          cold,
+		coldThreshold: coldThreshold,
+		logger:        logger,
 	}
 }
 
 func (e *Engine) Execute(ctx context.Context, req model.QueryRequest) (*model.QueryResponse, error) {
 	start := time.Now()
 
-	hotCutoff := time.Now().Add(-6 * time.Hour)
+	hotCutoff := time.Now().Add(-e.coldThreshold)
 	needsCold := req.StartTime.Before(hotCutoff)
 	needsHot := req.EndTime.After(hotCutoff)
 

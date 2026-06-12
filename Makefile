@@ -1,6 +1,6 @@
 .PHONY: build test lint run-local docker-build deploy clean
 
-SERVICES := ingestor query compactor
+SERVICES := ingestor query
 REGISTRY := ghcr.io/vamsi-arumalla
 
 build:
